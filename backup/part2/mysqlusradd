@@ -1,0 +1,95 @@
+#!/bin/bash
+
+usage () {
+  echo "Usage:"
+  echo "  ${1} mysql-key db-name new-login new-login-password"
+  echo
+  echo "The mysql-key is typically in /etc/mysql/debian.cnf"
+  echo "The db-name is the database name that you would like the"
+  echo "new-login to have access to. The database will be created."
+  echo "new-login is the new login to create."
+  echo "new-login-password is the new-login's password."
+  echo "THE SCRIPT GRANTS ALL PRIVELEGES TO THE SPECIFIED DB"
+  echo "FOR THE NEW USER CREATED."
+}
+
+
+#
+# Main
+#
+SCRIPTNAME=`basename ${0}`
+
+if [ $# -ne 4 ]; then
+  echo "Too few arguements."
+  usage ${SCRIPTNAME}
+  exit 1
+fi
+
+KEYS=${1}
+DBNAME=${2}
+LOGIN=${3}
+# Generate a password with apg
+# For example `apg -M NCLS -a 0 -m 15 -x 15 -c $$ -n 1`
+PASSWORD=${4}
+
+TMPFILE="/tmp/${SCRIPTNAME}.tmp.${$}"
+
+if [ ! -e ${KEYS} ]; then
+  echo "Please specify the defaults file that comes with your"
+  echo "installation of MySQL. This is typically /etc/mysql/debian.cnf."
+  exit 1
+fi
+
+ID=`id -u`
+if [ ${ID} -ne 0 ]; then
+        echo "You need to be root to run this script."
+        echo "Use sudo if you know what you are doing."
+        exit 1
+fi
+
+echo "This script will delete the database ${DBNAME} if it exists."
+echo "**You have 5 seconds to cancel with ctrl-c.**"
+sleep 5
+
+# Drop database
+echo "Dropping ${DBNAME}. You can safely ignore any error messages."
+yes | mysqladmin --defaults-file=${KEYS} drop ${DBNAME}
+# create database
+echo "Creating ${DBNAME}"
+mysqladmin --defaults-file=${KEYS} create ${DBNAME}
+
+if [ $? -ne 0 ]; then
+  echo "There was an error creating the database. Exiting."
+  exit 1
+fi
+
+cat > ${TMPFILE} <<EOF
+DROP USER IF EXISTS '${LOGIN}'@'localhost';
+CREATE USER '${LOGIN}'@'localhost'
+  IDENTIFIED BY '${PASSWORD}';
+GRANT ALL
+  ON ${DBNAME}.*
+  TO '${LOGIN}'@'localhost'
+  WITH GRANT OPTION;
+EOF
+
+echo "Creating user with the following statement."
+cat ${TMPFILE}
+mysql --defaults-file=${KEYS} < ${TMPFILE}
+
+if [ $? -ne 0 ]; then
+  echo "There was a problem and the user was probably not created."
+  echo "Continuing."
+fi
+
+# flush privleges
+echo "Flushing privileges"
+mysqladmin --defaults-file=${KEYS} flush-privileges
+if [ $? -ne 0 ]; then
+  echo "There was a problem flushing privileges. Exiting."
+  exit 1
+fi
+
+echo "Verify that everything was created to your satisfaction."
+echo "Attempt to connect to the DB using the following command:"
+echo "mysql -u ${LOGIN} -p${PASSWORD} ${DBNAME}"
